@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { GoogleGenAI } from "@google/genai";
 
-import { safeGetResponseText, extractGrounding } from "../gemini/response.js";
+import { safeGetResponseText, extractGrounding, addInlineCitations, formatSources } from "../gemini/response.js";
 
 export const webSearchInput = {
   query: z.string().describe("The search query to look up"),
@@ -27,30 +27,44 @@ export async function runWebSearch(params: {
       systemInstruction,
       tools: [{ googleSearch: {} }],
       temperature: 1.0,
-      maxOutputTokens: 1024
+      maxOutputTokens: 1536
     }
   });
 
   const answer = safeGetResponseText(response as unknown as any).trim();
   const grounding = extractGrounding(response as unknown as any);
-  const sources = grounding.sources;
+
+  // Add inline citations to the answer text
+  const textWithCitations = addInlineCitations(answer, grounding.chunks, grounding.supports);
 
   const lines: string[] = [];
-  lines.push(answer || "_No answer returned._");
+  lines.push(textWithCitations || "_No answer returned._");
 
+  // Format sources with domain names
+  const sources = formatSources(grounding.chunks);
   if (sources.length > 0) {
-    lines.push("\n\n## Sources");
-    sources.forEach((s, i) => {
-      const title = s.title ? ` — ${s.title}` : "";
-      lines.push(`${i + 1}. ${s.url}${title}`);
-    });
+    lines.push("\n\nSources: " + sources.join(" "));
   }
 
   return lines.join("\n");
 }
 
 function buildSystemInstruction(domain?: string): string {
-  const base = "You're a web search assistant. Utilize the web capabilities and search for relevant information from the query. Rely on latest and accurate information. Give summary of the findings.";
+  const base = `You are a web search assistant with real-time search capabilities.
+
+**Response Guidelines:**
+- For factual/quick lookups (dates, definitions, simple facts): Be brief and direct
+- For complex topics (how-to, comparisons, analysis): Provide structured, detailed explanations
+- For current events/news: Summarize key points with context and timeline
+- For technical queries: Include relevant code, specifications, or documentation references
+
+**Core Principles:**
+- Always use the most recent and authoritative sources
+- Lead with the direct answer, then expand if needed
+- Use bullet points or numbered lists for multi-part information
+- Omit filler phrases and redundant context
+- Match the depth of your response to the complexity of the query`;
+
   if (domain) {
     return `${base}\nPrioritize results from: ${domain}`;
   }

@@ -4,8 +4,14 @@ type GroundingChunk = {
   web?: GroundingChunkWeb;
 };
 
+type GroundingSupport = {
+  segment?: { startIndex?: number; endIndex?: number; text?: string };
+  groundingChunkIndices?: number[];
+};
+
 type GroundingMetadata = {
   groundingChunks?: GroundingChunk[];
+  groundingSupports?: GroundingSupport[];
   webSearchQueries?: string[];
 };
 
@@ -28,25 +34,62 @@ export function safeGetResponseText(resp: GenerateContentResponse): string {
 }
 
 export function extractGrounding(resp: GenerateContentResponse): {
-  sources: Array<{ title?: string; url: string }>;
+  chunks: GroundingChunk[];
+  supports: GroundingSupport[];
   webSearchQueries: string[];
-  rawGroundingMetadata?: unknown;
 } {
   const meta = resp.candidates?.[0]?.groundingMetadata;
-  const chunks = meta?.groundingChunks ?? [];
-  const seen = new Set<string>();
-  const sources: Array<{ title?: string; url: string }> = [];
-  for (const c of chunks) {
-    const url = c.web?.uri?.trim();
-    if (!url) continue;
-    if (seen.has(url)) continue;
-    seen.add(url);
-    sources.push({ title: c.web?.title, url });
-  }
   return {
-    sources,
-    webSearchQueries: meta?.webSearchQueries ?? [],
-    rawGroundingMetadata: meta
+    chunks: meta?.groundingChunks ?? [],
+    supports: meta?.groundingSupports ?? [],
+    webSearchQueries: meta?.webSearchQueries ?? []
   };
+}
+
+export function addInlineCitations(
+  text: string,
+  chunks: GroundingChunk[],
+  supports: GroundingSupport[]
+): string {
+  if (!supports.length || !chunks.length) return text;
+
+  // Sort supports by endIndex descending to avoid shifting issues
+  const sortedSupports = [...supports].sort(
+    (a, b) => (b.segment?.endIndex ?? 0) - (a.segment?.endIndex ?? 0)
+  );
+
+  let result = text;
+  for (const support of sortedSupports) {
+    const endIndex = support.segment?.endIndex;
+    if (endIndex === undefined || !support.groundingChunkIndices?.length) continue;
+
+    const citations = support.groundingChunkIndices
+      .map(i => {
+        const title = chunks[i]?.web?.title;
+        if (title) return `[${i + 1}]`;
+        return null;
+      })
+      .filter(Boolean);
+
+    if (citations.length > 0) {
+      result = result.slice(0, endIndex) + citations.join("") + result.slice(endIndex);
+    }
+  }
+
+  return result;
+}
+
+export function formatSources(chunks: GroundingChunk[]): string[] {
+  const seen = new Set<string>();
+  const sources: string[] = [];
+
+  chunks.forEach((c, i) => {
+    const title = c.web?.title?.trim();
+    if (!title || seen.has(title)) return;
+    seen.add(title);
+    sources.push(`[${i + 1}] ${title}`);
+  });
+
+  return sources;
 }
 

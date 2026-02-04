@@ -14,6 +14,7 @@ import {
   viewContentChunkInput,
   runViewContentChunk
 } from "./tools/urlContent.js";
+import { deepResearchInput, runDeepResearch } from "./tools/deepResearch.js";
 
 const config = loadConfig();
 const log = createLogger(config.logLevel);
@@ -88,6 +89,52 @@ registerToolCompat(
       return { content: [{ type: "text", text }] };
     } catch (err) {
       log.error("view_content_chunk failed", toErrorObject(err));
+      return { content: [{ type: "text", text: formatError(err) }], isError: true };
+    }
+  }
+);
+
+const DEEP_RESEARCH_DESCRIPTION = `Conduct comprehensive web research using Gemini's Deep Research Agent.
+
+When to use this tool:
+- Researching complex topics requiring multi-source analysis
+- Need synthesized information from the web
+- Require fact-checking and cross-referencing of information
+
+Parameters:
+- \`prompt\`: Your research question or topic (required)
+- \`include_citations\`: Whether to include source URLs in the report (default: true)
+
+Returns:
+- \`status\`: Final state (completed, failed, cancelled)
+- \`report_text\`: The synthesized research report with findings
+
+Notes:
+- This tool blocks until research completes (typically 10-20 minutes)`;
+
+registerToolCompat(
+  server,
+  "gemini_deep_research",
+  {
+    title: "Gemini Deep Research",
+    description: DEEP_RESEARCH_DESCRIPTION,
+    inputSchema: deepResearchInput
+  },
+  async (input: any) => {
+    try {
+      const apiKey = requireApiKey(config);
+      const ai = createGeminiClient(apiKey);
+      const result = await runDeepResearch({
+        ai,
+        agent: config.deepResearchAgent,
+        timeoutSeconds: config.deepResearchTimeoutSeconds,
+        pollIntervalSeconds: config.deepResearchPollIntervalSeconds,
+        input
+      });
+      // Return as JSON text for MCP
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      log.error("gemini_deep_research failed", toErrorObject(err));
       return { content: [{ type: "text", text: formatError(err) }], isError: true };
     }
   }

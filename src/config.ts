@@ -3,16 +3,20 @@ import { z } from "zod";
 const configSchema = z.object({
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3-flash-preview"),
-  GEMINI_URLSUMMARY_MODEL: z.string().min(1).default("gemini-3-flash-preview"),
-  GEMINI_MAX_SOURCES_DEFAULT: z.coerce.number().int().min(1).max(10).default(5),
+
+  GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-pro-preview-12-2025"),
+  GEMINI_DEEP_RESEARCH_TIMEOUT: z.coerce.number().int().min(60).default(1200),
+  GEMINI_DEEP_RESEARCH_POLL_INTERVAL: z.coerce.number().int().min(5).default(10),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
 
 export type AppConfig = {
   apiKey?: string;
   webSearchModel: string;
-  urlSummaryModel: string;
-  maxSourcesDefault: number;
+
+  deepResearchAgent: string;
+  deepResearchTimeoutSeconds: number;
+  deepResearchPollIntervalSeconds: number;
   logLevel: "debug" | "info" | "warn" | "error";
 };
 
@@ -25,8 +29,10 @@ export function loadConfig(): AppConfig {
   return {
     apiKey: parsed.data.GEMINI_API_KEY,
     webSearchModel: parsed.data.GEMINI_WEBSEARCH_MODEL,
-    urlSummaryModel: parsed.data.GEMINI_URLSUMMARY_MODEL,
-    maxSourcesDefault: parsed.data.GEMINI_MAX_SOURCES_DEFAULT,
+
+    deepResearchAgent: parsed.data.GEMINI_DEEP_RESEARCH_AGENT,
+    deepResearchTimeoutSeconds: parsed.data.GEMINI_DEEP_RESEARCH_TIMEOUT,
+    deepResearchPollIntervalSeconds: parsed.data.GEMINI_DEEP_RESEARCH_POLL_INTERVAL,
     logLevel: parsed.data.LOG_LEVEL
   };
 }

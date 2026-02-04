@@ -26,7 +26,7 @@ export async function runWebSearch(params: {
     config: {
       systemInstruction,
       tools: [{ googleSearch: {} }],
-      temperature: 0.2,
+      temperature: 1.0,
       maxOutputTokens: 1024
     }
   });

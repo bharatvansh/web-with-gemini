@@ -29,7 +29,7 @@ export async function runPageSummary(params: {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
       tools: [{ urlContext: {} }],
-      temperature: 0.2,
+      temperature: 1.0,
       maxOutputTokens: params.input.max_output_tokens
     }
   });

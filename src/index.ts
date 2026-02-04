@@ -8,14 +8,19 @@ import { loadConfig, requireApiKey } from "./config.js";
 import { createLogger } from "./log.js";
 import { createGeminiClient } from "./gemini/client.js";
 import { webSearchInput, runWebSearch } from "./tools/webSearch.js";
-import { pageSummaryInput, runPageSummary } from "./tools/pageSummary.js";
+import {
+  readUrlContentInput,
+  runReadUrlContent,
+  viewContentChunkInput,
+  runViewContentChunk
+} from "./tools/urlContent.js";
 
 const config = loadConfig();
 const log = createLogger(config.logLevel);
 
 const server = new McpServer({
   name: "gemini-web-mcp",
-  version: "0.1.0"
+  version: "0.2.0"
 });
 
 registerToolCompat(
@@ -45,24 +50,44 @@ registerToolCompat(
 
 registerToolCompat(
   server,
-  "page_summary",
+  "read_url_content",
   {
-    title: "Page Summary (Gemini)",
-    description: "Summarize a page via Gemini 3 Flash with URL context retrieval.",
-    inputSchema: pageSummaryInput
+    title: "Read URL Content",
+    description:
+      "Fetch content from a URL via HTTP request. Converts HTML to markdown. " +
+      "No JavaScript execution, no authentication. For pages requiring login or JavaScript, " +
+      "consider alternatives. Returns chunk summaries with positions - use view_content_chunk " +
+      "to read specific chunks by position. The DocumentId for view_content_chunk is the URL.",
+    inputSchema: readUrlContentInput
   },
   async (input: any) => {
     try {
-      const apiKey = requireApiKey(config);
-      const ai = createGeminiClient(apiKey);
-      const text = await runPageSummary({
-        ai,
-        model: config.urlSummaryModel,
-        input
-      });
+      const text = await runReadUrlContent({ input });
       return { content: [{ type: "text", text }] };
     } catch (err) {
-      log.error("page_summary failed", toErrorObject(err));
+      log.error("read_url_content failed", toErrorObject(err));
+      return { content: [{ type: "text", text: formatError(err) }], isError: true };
+    }
+  }
+);
+
+registerToolCompat(
+  server,
+  "view_content_chunk",
+  {
+    title: "View Content Chunk",
+    description:
+      "View a specific chunk of document content using its DocumentId and chunk position. " +
+      "The DocumentId must have already been read by the read_url_content tool before " +
+      "this can be used on that particular DocumentId.",
+    inputSchema: viewContentChunkInput
+  },
+  async (input: any) => {
+    try {
+      const text = runViewContentChunk(input);
+      return { content: [{ type: "text", text }] };
+    } catch (err) {
+      log.error("view_content_chunk failed", toErrorObject(err));
       return { content: [{ type: "text", text: formatError(err) }], isError: true };
     }
   }

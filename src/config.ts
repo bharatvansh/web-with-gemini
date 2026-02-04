@@ -7,6 +7,8 @@ const configSchema = z.object({
   GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-pro-preview-12-2025"),
   GEMINI_DEEP_RESEARCH_TIMEOUT: z.coerce.number().int().min(60).default(1200),
   GEMINI_DEEP_RESEARCH_POLL_INTERVAL: z.coerce.number().int().min(5).default(10),
+
+  GEMINI_IMAGE_MODEL: z.string().min(1).default("gemini-3-pro-image-preview"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
 
@@ -17,6 +19,8 @@ export type AppConfig = {
   deepResearchAgent: string;
   deepResearchTimeoutSeconds: number;
   deepResearchPollIntervalSeconds: number;
+
+  imageModel: string;
   logLevel: "debug" | "info" | "warn" | "error";
 };
 
@@ -33,6 +37,8 @@ export function loadConfig(): AppConfig {
     deepResearchAgent: parsed.data.GEMINI_DEEP_RESEARCH_AGENT,
     deepResearchTimeoutSeconds: parsed.data.GEMINI_DEEP_RESEARCH_TIMEOUT,
     deepResearchPollIntervalSeconds: parsed.data.GEMINI_DEEP_RESEARCH_POLL_INTERVAL,
+
+    imageModel: parsed.data.GEMINI_IMAGE_MODEL,
     logLevel: parsed.data.LOG_LEVEL
   };
 }

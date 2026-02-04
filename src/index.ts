@@ -15,6 +15,7 @@ import {
   runViewContentChunk
 } from "./tools/urlContent.js";
 import { deepResearchInput, runDeepResearch } from "./tools/deepResearch.js";
+import { createImageInput, runCreateImage } from "./tools/imageGeneration.js";
 
 const config = loadConfig();
 const log = createLogger(config.logLevel);
@@ -135,6 +136,85 @@ registerToolCompat(
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       log.error("gemini_deep_research failed", toErrorObject(err));
+      return { content: [{ type: "text", text: formatError(err) }], isError: true };
+    }
+  }
+);
+
+const CREATE_IMAGE_DESCRIPTION = `Generate or edit images using natural language instructions.
+
+Capabilities:
+- **Text-to-Image**: Generate images from text prompts
+- **Image-to-Image**: Edit existing images based on text instructions + reference image(s)
+
+Parameters:
+- \`prompt\`: Text prompt describing what to generate or how to edit (required)
+- \`images\`: Array of file paths to images for editing mode (optional, up to 7 images)
+- \`aspect_ratio\`: Output dimensions - "1:1", "16:9", "9:16", "4:3", "3:4" (optional, default: "1:1")
+
+Notes:
+- The resulting image will be saved as an artifact for use and file paths are returned
+- Image model can't generate transparent images, use workarounds
+- For best results, be specific and descriptive in your prompts`;
+
+registerToolCompat(
+  server,
+  "create_image",
+  {
+    title: "Create Image",
+    description: CREATE_IMAGE_DESCRIPTION,
+    inputSchema: createImageInput
+  },
+  async (input: any) => {
+    try {
+      const apiKey = requireApiKey(config);
+      const ai = createGeminiClient(apiKey);
+      const result = await runCreateImage({
+        ai,
+        model: config.imageModel,
+        input
+      });
+
+      if (!result.success) {
+        return { content: [{ type: "text", text: `Error: ${result.error}` }], isError: true };
+      }
+
+      // Build content array with proper MCP content types
+      const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
+
+      // Add text response if present
+      if (result.text) {
+        content.push({ type: "text", text: result.text });
+      }
+
+      // Add images using MCP's native image content type + include file paths
+      if (result.images && result.images.length > 0) {
+        const filePaths = result.images.map(img => img.filePath);
+
+        // Add file paths as text so agent can access them
+        content.push({
+          type: "text",
+          text: `Generated ${result.images.length} image(s). Saved to:\n${filePaths.join("\n")}\n\nYou can copy these to the workspace, pass back for edits, or retry if not as expected.`
+        });
+
+        // Add image previews
+        for (const img of result.images) {
+          content.push({
+            type: "image",
+            data: img.data,
+            mimeType: img.mimeType
+          });
+        }
+      }
+
+      // If no content was added, return a success message
+      if (content.length === 0) {
+        content.push({ type: "text", text: "Image generated successfully but no content returned." });
+      }
+
+      return { content };
+    } catch (err) {
+      log.error("create_image failed", toErrorObject(err));
       return { content: [{ type: "text", text: formatError(err) }], isError: true };
     }
   }

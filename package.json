@@ -1,8 +1,28 @@
 {
   "name": "gemini-web-mcp",
   "version": "0.1.0",
-  "private": true,
+  "description": "MCP server with Gemini-powered web tools: search, content extraction, deep research, and image generation",
+  "author": "bharatvansh",
+  "license": "MIT",
   "type": "module",
+  "keywords": [
+    "mcp",
+    "gemini",
+    "google",
+    "ai",
+    "web-search",
+    "deep-research",
+    "image-generation",
+    "model-context-protocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bharatvansh/gemini-web-mcp.git"
+  },
+  "homepage": "https://github.com/bharatvansh/gemini-web-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/bharatvansh/gemini-web-mcp/issues"
+  },
   "bin": {
     "gemini-web-mcp": "dist/index.js"
   },

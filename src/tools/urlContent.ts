@@ -543,14 +543,18 @@ function formatReadUrlResponse(doc: StoredDocument): string {
         parts.push(`\n⚠️ Note: This page may not be a standard article. Content extraction quality may vary.`);
     }
 
-    parts.push(`\nDocument contains ${doc.chunks.length} chunks:`);
+    if (doc.chunks.length === 1) {
+        parts.push(`\n**Content:**\n\n${doc.chunks[0].content}`);
+    } else {
+        parts.push(`\nDocument contains ${doc.chunks.length} chunks:`);
 
-    for (const chunk of doc.chunks) {
-        const overlapNote = chunk.hasOverlap ? " (includes overlap)" : "";
-        parts.push(`- [${chunk.position}] ${chunk.summary} (${chunk.charCount} chars${overlapNote})`);
+        for (const chunk of doc.chunks) {
+            const overlapNote = chunk.hasOverlap ? " (includes overlap)" : "";
+            parts.push(`- [${chunk.position}] ${chunk.summary} (${chunk.charCount} chars${overlapNote})`);
+        }
+
+        parts.push(`\nUse view_content_chunk with document_id="${doc.url}" and position=N to read a chunk.`);
     }
-
-    parts.push(`\nUse view_content_chunk with document_id="${doc.url}" and position=N to read a chunk.`);
 
     return parts.join("\n");
 }

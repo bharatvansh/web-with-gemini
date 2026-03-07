@@ -58,8 +58,9 @@ registerToolCompat(
     description:
       "Fetch content from a URL via HTTP request. Converts HTML to markdown. " +
       "No JavaScript execution, no authentication. For pages requiring login or JavaScript, " +
-      "consider alternatives. Returns chunk summaries with positions - use view_content_chunk " +
-      "to read specific chunks by position. The DocumentId for view_content_chunk is the URL.",
+      "consider alternatives. Returns content directly if small, or chunk summaries with positions " +
+      "for large pages - use view_content_chunk to read specific chunks by position. " +
+      "The DocumentId for view_content_chunk is the URL.",
     inputSchema: readUrlContentInput
   },
   async (input: any) => {

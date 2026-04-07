@@ -85,9 +85,24 @@ export function formatSources(chunks: GroundingChunk[]): string[] {
 
   chunks.forEach((c, i) => {
     const title = c.web?.title?.trim();
-    if (!title || seen.has(title)) return;
-    seen.add(title);
-    sources.push(`[${i + 1}] ${title}`);
+    const uri = c.web?.uri?.trim();
+    
+    // We need at least a title or a URI
+    if (!title && !uri) return;
+    
+    // Use URI for deduplication if available, otherwise title
+    const uniqueKey = uri || title;
+    if (!uniqueKey || seen.has(uniqueKey)) return;
+    
+    seen.add(uniqueKey);
+    
+    if (title && uri) {
+      sources.push(`[${i + 1}] ${title} (${uri})`);
+    } else if (uri) {
+      sources.push(`[${i + 1}] ${uri}`);
+    } else if (title) {
+      sources.push(`[${i + 1}] ${title}`);
+    }
   });
 
   return sources;

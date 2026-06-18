@@ -18,7 +18,11 @@ export const deepResearchInput = z.object({
     include_citations: z
         .boolean()
         .default(true)
-        .describe("Whether to include source URLs in the report")
+        .describe("Whether to include source URLs in the report"),
+    agent: z
+        .string()
+        .optional()
+        .describe("Override the default Deep Research Agent name/model")
 });
 
 export type DeepResearchInput = z.infer<typeof deepResearchInput>;

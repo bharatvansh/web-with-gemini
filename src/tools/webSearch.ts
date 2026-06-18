@@ -5,12 +5,14 @@ import { safeGetResponseText, extractGrounding, addInlineCitations, formatSource
 
 export const webSearchInput = {
   query: z.string().describe("The search query to look up"),
-  domain: z.string().optional().describe("Optional domain to recommend the search prioritize")
+  domain: z.string().optional().describe("Optional domain to recommend the search prioritize"),
+  model: z.string().optional().describe("Override the default Gemini model used for search")
 };
 
 export type WebSearchArgs = {
   query: string;
   domain?: string;
+  model?: string;
 };
 
 export async function runWebSearch(params: {

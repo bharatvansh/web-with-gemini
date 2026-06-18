@@ -39,7 +39,7 @@ registerToolCompat(
       const ai = createGeminiClient(apiKey);
       const text = await runWebSearch({
         ai,
-        model: config.webSearchModel,
+        model: input.model || config.webSearchModel,
         input
       });
       return { content: [{ type: "text", text }] };
@@ -128,7 +128,7 @@ registerToolCompat(
       const ai = createGeminiClient(apiKey);
       const result = await runDeepResearch({
         ai,
-        agent: config.deepResearchAgent,
+        agent: input.agent || config.deepResearchAgent,
         timeoutSeconds: config.deepResearchTimeoutSeconds,
         pollIntervalSeconds: config.deepResearchPollIntervalSeconds,
         input
@@ -172,7 +172,7 @@ registerToolCompat(
       const ai = createGeminiClient(apiKey);
       const result = await runCreateImage({
         ai,
-        model: config.imageModel,
+        model: input.model || config.imageModel,
         input
       });
 

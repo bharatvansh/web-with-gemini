@@ -2,13 +2,13 @@ import { z } from "zod";
 
 const configSchema = z.object({
   GEMINI_API_KEY: z.string().min(1).optional(),
-  GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3-flash-preview"),
+  GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3.5-flash"),
 
-  GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-pro-preview-12-2025"),
-  GEMINI_DEEP_RESEARCH_TIMEOUT: z.coerce.number().int().min(60).default(1200),
+  GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-preview-04-2026"),
+  GEMINI_DEEP_RESEARCH_TIMEOUT: z.coerce.number().int().min(60).default(900),
   GEMINI_DEEP_RESEARCH_POLL_INTERVAL: z.coerce.number().int().min(5).default(10),
 
-  GEMINI_IMAGE_MODEL: z.string().min(1).default("gemini-3-pro-image-preview"),
+  GEMINI_IMAGE_MODEL: z.string().min(1).default("gemini-3.1-flash-image"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
 

@@ -191,11 +191,11 @@ Then use `gemini-web-mcp` as the command instead of `npx -y gemini-web-mcp` in y
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `GEMINI_API_KEY` | ✓ | — | Your [Gemini API key](https://aistudio.google.com/apikey) |
-| `GEMINI_WEBSEARCH_MODEL` | | `gemini-3-flash-preview` | Model for web search |
-| `GEMINI_DEEP_RESEARCH_AGENT` | | `deep-research-pro-preview-12-2025` | Deep Research model |
-| `GEMINI_DEEP_RESEARCH_TIMEOUT` | | `1200` | Research timeout in seconds |
+| `GEMINI_WEBSEARCH_MODEL` | | `gemini-3.5-flash` | Model for web search |
+| `GEMINI_DEEP_RESEARCH_AGENT` | | `deep-research-preview-04-2026` | Deep Research model |
+| `GEMINI_DEEP_RESEARCH_TIMEOUT` | | `900` | Research timeout in seconds |
 | `GEMINI_DEEP_RESEARCH_POLL_INTERVAL` | | `10` | Polling interval in seconds |
-| `GEMINI_IMAGE_MODEL` | | `gemini-3-pro-image-preview` | Image generation model |
+| `GEMINI_IMAGE_MODEL` | | `gemini-3.1-flash-image` | Image generation model |
 | `LOG_LEVEL` | | `info` | Logging level |
 
 ---
@@ -206,9 +206,11 @@ Then use `gemini-web-mcp` as the command instead of `npx -y gemini-web-mcp` in y
 
 Performs a web search and returns an AI-synthesized summary with citations.
 
-| Parameter | Type | Required | Description |
-|-----------|------|:--------:|-------------|
-| `query` | string | ✓ | Search query |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|:--------:|---------|-------------|
+| `query` | string | ✓ | — | Search query |
+| `domain` | string | | — | Optional domain to recommend the search prioritize |
+| `model` | string | | Configured default | Override default search model |
 
 ---
 
@@ -241,6 +243,7 @@ Conducts comprehensive web research using Gemini's Deep Research Agent. Blocks u
 |-----------|------|:--------:|---------|-------------|
 | `prompt` | string | ✓ | — | Research question or topic |
 | `include_citations` | boolean | | `true` | Include source URLs |
+| `agent` | string | | Configured default | Override default Deep Research Agent name |
 
 **Returns:** `{ status, report_text }`
 
@@ -255,6 +258,7 @@ Generate images from text prompts or edit existing images.
 | `prompt` | string | ✓ | — | Text description or edit instructions |
 | `images` | string[] | | — | File paths for image editing (up to 7) |
 | `aspect_ratio` | string | | `"1:1"` | `"1:1"`, `"16:9"`, `"9:16"`, `"4:3"`, `"3:4"` |
+| `model` | string | | Configured default | Override default image generation model |
 
 ---
 

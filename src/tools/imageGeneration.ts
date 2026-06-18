@@ -17,13 +17,15 @@ export const createImageInput = {
     ),
     aspect_ratio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional().describe(
         "Output aspect ratio. Default: 1:1. Only used for generation, not editing."
-    )
+    ),
+    model: z.string().optional().describe("Override the default Gemini image model")
 };
 
 export type CreateImageArgs = {
     prompt: string;
     images?: string[];
     aspect_ratio?: "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
+    model?: string;
 };
 
 export type ImageResult = {

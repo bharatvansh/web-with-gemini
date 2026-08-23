@@ -27,7 +27,7 @@ const log = createLogger(config.logLevel);
 
 const server = new McpServer({
   name: "gemini-web-mcp",
-  version: "0.2.0"
+  version: "0.3.0"
 });
 
 registerToolCompat(
@@ -61,7 +61,7 @@ registerToolCompat(
   {
     title: "Read URL Content",
     description:
-      "Fetch content from a URL via HTTP request. Supports HTML, PDF, JSON, Markdown, Plain Text, CSV, and XML/RSS feeds, converting them to clean markdown. " +
+      "Fetch content from a URL via HTTP request and convert it to clean markdown. " +
       "No JavaScript execution, no authentication. For pages requiring login or JavaScript, " +
       "consider alternatives. Returns content directly if small, or chunk summaries with positions " +
       "for large pages - use view_content_chunk to read specific chunks by position. " +

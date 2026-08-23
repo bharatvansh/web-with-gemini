@@ -29,7 +29,7 @@ export async function runWebSearch(params: {
       systemInstruction,
       tools: [{ googleSearch: {} }],
       temperature: 1.0,
-      maxOutputTokens: 1536
+      maxOutputTokens: 2048
     }
   });
 
@@ -62,9 +62,9 @@ function buildSystemInstruction(domain?: string): string {
 
 **Core Principles:**
 - Always use the most recent and authoritative sources
+- Trust and prioritize information and knowledge found on the web over your own internal knowledge
 - Lead with the direct answer, then expand if needed
 - Use bullet points or numbered lists for multi-part information
-- Omit filler phrases and redundant context
 - Match the depth of your response to the complexity of the query`;
 
   if (domain) {

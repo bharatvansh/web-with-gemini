@@ -2,11 +2,10 @@ import { z } from "zod";
 
 const configSchema = z.object({
   GEMINI_API_KEY: z.string().min(1).optional(),
+  GOOGLE_API_KEY: z.string().min(1).optional(),
   GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3.5-flash"),
 
   GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-preview-04-2026"),
-  GEMINI_DEEP_RESEARCH_TIMEOUT: z.coerce.number().int().min(60).default(900),
-  GEMINI_DEEP_RESEARCH_POLL_INTERVAL: z.coerce.number().int().min(5).default(10),
 
   GEMINI_IMAGE_MODEL: z.string().min(1).default("gemini-3.1-flash-image"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
@@ -17,8 +16,6 @@ export type AppConfig = {
   webSearchModel: string;
 
   deepResearchAgent: string;
-  deepResearchTimeoutSeconds: number;
-  deepResearchPollIntervalSeconds: number;
 
   imageModel: string;
   logLevel: "debug" | "info" | "warn" | "error";
@@ -31,12 +28,10 @@ export function loadConfig(): AppConfig {
     throw new Error(`Invalid environment configuration: ${message}`);
   }
   return {
-    apiKey: parsed.data.GEMINI_API_KEY,
+    apiKey: parsed.data.GEMINI_API_KEY || parsed.data.GOOGLE_API_KEY,
     webSearchModel: parsed.data.GEMINI_WEBSEARCH_MODEL,
 
     deepResearchAgent: parsed.data.GEMINI_DEEP_RESEARCH_AGENT,
-    deepResearchTimeoutSeconds: parsed.data.GEMINI_DEEP_RESEARCH_TIMEOUT,
-    deepResearchPollIntervalSeconds: parsed.data.GEMINI_DEEP_RESEARCH_POLL_INTERVAL,
 
     imageModel: parsed.data.GEMINI_IMAGE_MODEL,
     logLevel: parsed.data.LOG_LEVEL
@@ -46,7 +41,7 @@ export function loadConfig(): AppConfig {
 export function requireApiKey(config: AppConfig): string {
   const key = config.apiKey?.trim();
   if (!key) {
-    throw new Error("GEMINI_API_KEY is missing. Set it in your environment or .env.");
+    throw new Error("Missing GEMINI_API_KEY (or GOOGLE_API_KEY fallback). Set it in your environment or .env.");
   }
   return key;
 }

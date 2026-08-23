@@ -14,7 +14,12 @@ import {
   viewContentChunkInput,
   runViewContentChunk
 } from "./tools/urlContent.js";
-import { deepResearchInput, runDeepResearch } from "./tools/deepResearch.js";
+import {
+  startDeepResearchInput,
+  runStartDeepResearch,
+  checkDeepResearchInput,
+  runCheckDeepResearch
+} from "./tools/deepResearch.js";
 import { createImageInput, runCreateImage } from "./tools/imageGeneration.js";
 
 const config = loadConfig();
@@ -96,47 +101,72 @@ registerToolCompat(
   }
 );
 
-const DEEP_RESEARCH_DESCRIPTION = `Conduct comprehensive web research using Gemini's Deep Research Agent.
-
-When to use this tool:
-- Researching complex topics requiring multi-source analysis
-- Need synthesized information from the web
-- Require fact-checking and cross-referencing of information
+const START_DEEP_RESEARCH_DESCRIPTION = `Initiates a deep, multi-step web research job in the background using Google's Deep Research Agent. Returns a job_id, which you can use to check the status of completion using check_deep_research(job_id=...).
 
 Parameters:
-- \`prompt\`: Your research question or topic (required)
-- \`include_citations\`: Whether to include source URLs in the report (default: true)
+- \`prompt\`: The comprehensive research question or topic to investigate (required)
 
 Returns:
-- \`status\`: Final state (completed, failed, cancelled)
-- \`report_text\`: The synthesized research report with findings
-
-Notes:
-- This tool blocks until research completes (typically 10-20 minutes)`;
+- \`job_id\`: Unique tracking ID for the research job
+- \`status\`: Initial job state (typically 'in_progress')`;
 
 registerToolCompat(
   server,
-  "gemini_deep_research",
+  "start_deep_research",
   {
-    title: "Gemini Deep Research",
-    description: DEEP_RESEARCH_DESCRIPTION,
-    inputSchema: deepResearchInput
+    title: "Start Gemini Deep Research",
+    description: START_DEEP_RESEARCH_DESCRIPTION,
+    inputSchema: startDeepResearchInput
+  },
+    async (input: any) => {
+    try {
+      const apiKey = requireApiKey(config);
+      const ai = createGeminiClient(apiKey);
+      const result = await runStartDeepResearch({
+        ai,
+        agent: config.deepResearchAgent,
+        input
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      log.error("start_deep_research failed", toErrorObject(err));
+      return { content: [{ type: "text", text: formatError(err) }], isError: true };
+    }
+  }
+);
+
+const CHECK_DEEP_RESEARCH_DESCRIPTION = `Checks the status of a Deep Research job using its job_id and returns the complete report once finished.
+
+Parameters:
+- \`job_id\`: The tracking ID returned by \`start_deep_research\` (required)
+- \`include_citations\`: Whether to include source URLs in the report (default: true)
+
+Returns:
+- \`job_id\`: The tracking ID of the research job
+- \`status\`: Current job state ('in_progress', 'completed', 'failed', or 'cancelled')
+- \`report_text\`: The synthesized research report when completed
+- \`uptime\`: Elapsed time while the job is in progress, when available
+- \`error\`: Failure details, when the API provides them`;
+
+registerToolCompat(
+  server,
+  "check_deep_research",
+  {
+    title: "Check Gemini Deep Research",
+    description: CHECK_DEEP_RESEARCH_DESCRIPTION,
+    inputSchema: checkDeepResearchInput
   },
   async (input: any) => {
     try {
       const apiKey = requireApiKey(config);
       const ai = createGeminiClient(apiKey);
-      const result = await runDeepResearch({
+      const result = await runCheckDeepResearch({
         ai,
-        agent: input.agent || config.deepResearchAgent,
-        timeoutSeconds: config.deepResearchTimeoutSeconds,
-        pollIntervalSeconds: config.deepResearchPollIntervalSeconds,
         input
       });
-      // Return as JSON text for MCP
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
-      log.error("gemini_deep_research failed", toErrorObject(err));
+      log.error("check_deep_research failed", toErrorObject(err));
       return { content: [{ type: "text", text: formatError(err) }], isError: true };
     }
   }

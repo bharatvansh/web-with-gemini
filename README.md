@@ -13,7 +13,8 @@ An MCP server that brings **Gemini-powered web tools** to your AI coding assista
 | **`search_web`** | Web search with AI-synthesized summaries and citations |
 | **`read_url_content`** | Extract and convert web pages to clean markdown |
 | **`view_content_chunk`** | Navigate large documents chunk by chunk |
-| **`gemini_deep_research`** | Multi-source analysis with Gemini's Deep Research Agent |
+| **`start_deep_research`** | Initiate multi-step background research with Gemini's Deep Research Agent |
+| **`check_deep_research`** | Check status, uptime, error details, and retrieve synthesized research report |
 | **`create_image`** | Generate or edit images using natural language |
 
 ---
@@ -190,13 +191,11 @@ Then use `gemini-web-mcp` as the command instead of `npx -y gemini-web-mcp` in y
 
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
-| `GEMINI_API_KEY` | ✓ | — | Your [Gemini API key](https://aistudio.google.com/apikey) |
+| `GEMINI_API_KEY` | ✓ | — | Your [Gemini API key](https://aistudio.google.com/apikey) (also supports `GOOGLE_API_KEY` fallback) |
 | `GEMINI_WEBSEARCH_MODEL` | | `gemini-3.5-flash` | Model for web search |
-| `GEMINI_DEEP_RESEARCH_AGENT` | | `deep-research-preview-04-2026` | Deep Research model |
-| `GEMINI_DEEP_RESEARCH_TIMEOUT` | | `900` | Research timeout in seconds |
-| `GEMINI_DEEP_RESEARCH_POLL_INTERVAL` | | `10` | Polling interval in seconds |
+| `GEMINI_DEEP_RESEARCH_AGENT` | | `deep-research-preview-04-2026` | Deep Research agent name (`deep-research-preview-04-2026` for standard speed, `deep-research-max-preview-04-2026` for maximum thoroughness) |
 | `GEMINI_IMAGE_MODEL` | | `gemini-3.1-flash-image` | Image generation model |
-| `LOG_LEVEL` | | `info` | Logging level |
+| `LOG_LEVEL` | | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
 
 ---
 
@@ -235,17 +234,31 @@ Retrieves a specific chunk from a previously fetched document.
 
 ---
 
-### `gemini_deep_research`
+### `start_deep_research`
 
-Conducts comprehensive web research using Gemini's Deep Research Agent. Blocks until complete (typically 10-20 minutes).
+Initiates a deep, multi-step web research job in the background using Google's Deep Research Agent. Returns a `job_id`, which you can use to check the status of completion using `check_deep_research(job_id=...)`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|:--------:|---------|-------------|
-| `prompt` | string | ✓ | — | Research question or topic |
-| `include_citations` | boolean | | `true` | Include source URLs |
-| `agent` | string | | Configured default | Override default Deep Research Agent name |
+| `prompt` | string | ✓ | — | Your comprehensive research question or topic |
 
-**Returns:** `{ status, report_text }`
+**Returns:** `{ "job_id": "...", "status": "in_progress" }`
+
+---
+
+### `check_deep_research`
+
+Checks the status of a Deep Research job using its `job_id` and returns the complete synthesized report once finished.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|:--------:|---------|-------------|
+| `job_id` | string | ✓ | — | The research tracking ID from `start_deep_research` |
+| `include_citations` | boolean | | `true` | Include resolved source URLs in the report |
+
+**Returns:**
+- In Progress: `{ "job_id": "...", "status": "in_progress", "uptime": "2m 15s" }`
+- Completed: `{ "job_id": "...", "status": "completed", "report_text": "..." }`
+- Failed: `{ "job_id": "...", "status": "failed", "error": "Error 403 - ..." }`
 
 ---
 

@@ -1,122 +1,163 @@
 /**
- * Gemini Deep Research Tool
+ * Gemini Deep Research Tools
  *
  * Conducts comprehensive web research using Gemini's Deep Research Agent.
- * Ported from the Python implementation.
+ * Exposes start_deep_research and check_deep_research tools.
  */
 
 import { z } from "zod";
 import { GoogleGenAI } from "@google/genai";
 
-// --- Input Schema ---
+// --- Input Schemas ---
 
-export const deepResearchInput = z.object({
-    prompt: z
-        .string()
-        .min(1, "prompt is required")
-        .describe("Your research question or topic"),
-    include_citations: z
-        .boolean()
-        .default(true)
-        .describe("Whether to include source URLs in the report"),
-    agent: z
-        .string()
-        .optional()
-        .describe("Override the default Deep Research Agent name/model")
+export const startDeepResearchInput = z.object({
+  prompt: z
+    .string()
+    .min(1, "prompt is required")
+    .describe("Your comprehensive research question or topic to investigate")
 });
 
-export type DeepResearchInput = z.infer<typeof deepResearchInput>;
+export type StartDeepResearchInput = z.infer<typeof startDeepResearchInput>;
 
-// --- Output Type ---
+export const checkDeepResearchInput = z.object({
+  job_id: z
+    .string()
+    .min(1, "job_id is required")
+    .describe("The research tracking ID returned by start_deep_research"),
+  include_citations: z
+    .boolean()
+    .default(true)
+    .describe("Whether to include source URLs in the report (default: true)")
+});
 
-export interface DeepResearchOutput {
-    status: string;
-    report_text: string;
+export type CheckDeepResearchInput = z.infer<typeof checkDeepResearchInput>;
+
+// --- Output Interfaces ---
+
+export interface StartResearchOutput {
+  job_id: string;
+  status: string;
 }
 
-// --- URL Redirect Resolution ---
+export interface CheckResearchOutput {
+  job_id: string;
+  status: string;
+  report_text?: string;
+  uptime?: string;
+  error?: string;
+}
 
-/**
- * Pattern to match Gemini grounding redirect URLs
- */
+// --- Interaction Model Interfaces ---
+
+export interface InteractionStep {
+  type?: string;
+  content?: Array<{ type?: string; text?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+export interface InteractionOutput {
+  type?: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+export interface Interaction {
+  id?: string;
+  status?: string;
+  created?: string | number | Date;
+  updated?: string | number | Date;
+  output_text?: string;
+  outputs?: InteractionOutput[];
+  steps?: InteractionStep[];
+  error?: {
+    code?: string | number;
+    message?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// --- URL Redirect Resolution & Caching ---
+
 const REDIRECT_URL_PATTERN =
-    /https:\/\/vertexaisearch\.cloud\.google\.com\/grounding-api-redirect\/[A-Za-z0-9_-]+/g;
+  /https:\/\/vertexaisearch\.cloud\.google\.com\/grounding-api-redirect\/[A-Za-z0-9_-]+/g;
+
+const resolvedUrlCache = new Map<string, string>();
 
 /**
  * Resolve a Gemini grounding redirect URL to its actual destination.
- * Uses HEAD request to follow redirects without downloading content.
+ * Uses HEAD request with manual redirect to capture Location header, fallback to GET.
  */
-async function resolveRedirectUrl(url: string): Promise<string | null> {
-    if (!url || !url.includes("grounding-api-redirect")) {
-        return null;
-    }
-
-    try {
-        // Use HEAD request with redirect: "manual" to capture Location header
-        const response = await fetch(url, {
-            method: "HEAD",
-            redirect: "manual"
-        });
-
-        // Check for redirect status codes
-        if ([301, 302, 303, 307, 308].includes(response.status)) {
-            const location = response.headers.get("location");
-            if (location) {
-                return location;
-            }
-        }
-
-        // If no redirect, try GET as fallback
-        const getResponse = await fetch(url, {
-            method: "GET",
-            redirect: "follow"
-        });
-
-        const finalUrl = getResponse.url;
-        if (finalUrl !== url && !finalUrl.includes("grounding-api-redirect")) {
-            return finalUrl;
-        }
-    } catch (error) {
-        // Silently fail, keep original URL
-    }
-
+export async function resolveRedirectUrl(url: string): Promise<string | null> {
+  if (!url || !url.includes("grounding-api-redirect")) {
     return null;
+  }
+
+  if (resolvedUrlCache.has(url)) {
+    return resolvedUrlCache.get(url)!;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      redirect: "manual"
+    });
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (location) {
+        resolvedUrlCache.set(url, location);
+        return location;
+      }
+    }
+
+    const getResponse = await fetch(url, {
+      method: "GET",
+      redirect: "follow"
+    });
+
+    const finalUrl = getResponse.url;
+    if (finalUrl && finalUrl !== url && !finalUrl.includes("grounding-api-redirect")) {
+      resolvedUrlCache.set(url, finalUrl);
+      return finalUrl;
+    }
+  } catch {
+    // Silently ignore network failures and fallback to original URL
+  }
+
+  return null;
 }
 
 /**
  * Find and resolve all grounding redirect URLs in text.
  * Replaces redirect URLs with resolved destination URLs where possible.
  */
-async function resolveSourcesInText(text: string): Promise<string> {
-    if (!text || !text.includes("grounding-api-redirect")) {
-        return text;
+export async function resolveSourcesInText(text: string): Promise<string> {
+  if (!text || !text.includes("grounding-api-redirect")) {
+    return text;
+  }
+
+  const matches = text.match(REDIRECT_URL_PATTERN);
+  if (!matches) {
+    return text;
+  }
+
+  const uniqueUrls = [...new Set(matches)];
+  const resolutions = await Promise.all(
+    uniqueUrls.map(async (url) => {
+      const resolved = await resolveRedirectUrl(url);
+      return { original: url, resolved };
+    })
+  );
+
+  let result = text;
+  for (const { original, resolved } of resolutions) {
+    if (resolved) {
+      result = result.split(original).join(resolved);
     }
+  }
 
-    const matches = text.match(REDIRECT_URL_PATTERN);
-    if (!matches) {
-        return text;
-    }
-
-    // Deduplicate URLs
-    const uniqueUrls = [...new Set(matches)];
-
-    // Resolve all URLs in parallel
-    const resolutions = await Promise.all(
-        uniqueUrls.map(async (url) => {
-            const resolved = await resolveRedirectUrl(url);
-            return { original: url, resolved };
-        })
-    );
-
-    // Replace all occurrences
-    let result = text;
-    for (const { original, resolved } of resolutions) {
-        if (resolved) {
-            result = result.split(original).join(resolved);
-        }
-    }
-
-    return result;
+  return result;
 }
 
 // --- Reference Stripping ---
@@ -128,123 +169,231 @@ async function resolveSourcesInText(text: string): Promise<string> {
  * 1. Inline [cite: X] markers throughout the text
  * 2. A 'References' section with brief citation titles (REDUNDANT)
  * 3. A 'Sources:' section at the end with full URLs (KEEP THIS)
- *
- * We remove the References section since:
- * - The inline [cite: X] markers already show where info comes from
- * - The Sources section has the actual clickable URLs
- * - The References section just has brief titles without URLs
  */
-function stripDuplicateReferences(text: string): string {
-    // Match "### References" or "References" section with cite entries
-    // Format: [cite: X] Title. Description.
-    const pattern = /\n+(?:#{1,3}\s*)?References\s*\n(?:\[cite:\s*\d+\][^\n]*\n?)+/gi;
-    const cleaned = text.replace(pattern, "\n");
-    return cleaned.trim();
+export function stripDuplicateReferences(text: string): string {
+  const pattern = /\n+(?:#{1,3}\s*)?References\s*\n(?:\[cite:\s*\d+\][^\n]*\n?)+/gi;
+  const cleaned = text.replace(pattern, "\n");
+  return cleaned.trim();
 }
 
 // --- Output Extraction ---
 
-interface InteractionOutput {
-    text?: string;
-}
-
-interface Interaction {
-    id?: string;
-    status?: string;
-    outputs?: InteractionOutput[];
-}
-
 /**
  * Extract and join text from interaction outputs.
  */
-function outputsToText(
-    outputs: InteractionOutput[] | undefined | null,
-    includeCitations: boolean
+export function outputsToText(
+  outputs: InteractionOutput[] | undefined | null
 ): string {
-    if (!outputs || outputs.length === 0) {
-        return "";
+  if (!outputs || !Array.isArray(outputs) || outputs.length === 0) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  for (const out of outputs) {
+    if (typeof out?.text === "string" && out.text.trim()) {
+      parts.push(out.text);
     }
+  }
 
-    const parts: string[] = [];
-    for (const out of outputs) {
-        if (typeof out.text === "string" && out.text.trim()) {
-            parts.push(out.text);
-        }
-    }
-
-    let result = stripDuplicateReferences(parts.join("\n\n").trim());
-
-    // Note: URL resolution is async and handled separately
-    return result;
+  return parts.join("\n\n").trim();
 }
 
-// --- Sleep Utility ---
+/**
+ * Convert an Interaction object to synthesized report markdown text.
+ */
+export async function extractInteractionResult(
+  interaction: Interaction,
+  includeCitations: boolean = true
+): Promise<string> {
+  let rawText = "";
 
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  if (interaction.outputs && Array.isArray(interaction.outputs) && interaction.outputs.length > 0) {
+    rawText = outputsToText(interaction.outputs);
+  } else if (typeof interaction.output_text === "string" && interaction.output_text.trim()) {
+    rawText = interaction.output_text.trim();
+  } else if (interaction.steps && Array.isArray(interaction.steps)) {
+    const stepParts: string[] = [];
+    for (const step of interaction.steps) {
+      if (step?.type !== "model_output" || !Array.isArray(step.content)) {
+        continue;
+      }
+      for (const item of step.content) {
+        if (typeof item?.text === "string" && item.text.trim()) {
+          stepParts.push(item.text);
+        }
+      }
+    }
+    rawText = stepParts.join("\n\n").trim();
+  }
+
+  let finalized = stripDuplicateReferences(rawText);
+  if (includeCitations && finalized) {
+    finalized = await resolveSourcesInText(finalized);
+  }
+
+  return finalized;
 }
 
-// --- Main Tool Function ---
+// --- Formatting Helpers ---
 
-export interface RunDeepResearchParams {
-    ai: GoogleGenAI;
-    agent: string;
-    timeoutSeconds: number;
-    pollIntervalSeconds: number;
-    input: DeepResearchInput;
+/**
+ * Format uptime elapsed duration (e.g., "4m 12s", "1h 5m 30s") from created timestamp.
+ */
+export function formatUptime(created: unknown): string | null {
+  if (!created) return null;
+  try {
+    let createdMs: number;
+    if (typeof created === "string") {
+      createdMs = new Date(created.replace("Z", "+00:00")).getTime();
+    } else if (created instanceof Date) {
+      createdMs = created.getTime();
+    } else if (typeof created === "number") {
+      createdMs = created < 1e11 ? created * 1000 : created;
+    } else {
+      return null;
+    }
+
+    if (Number.isNaN(createdMs)) return null;
+
+    const now = Date.now();
+    const diffSeconds = Math.max(0, Math.floor((now - createdMs) / 1000));
+
+    const hours = Math.floor(diffSeconds / 3600);
+    const mins = Math.floor((diffSeconds % 3600) / 60);
+    const secs = diffSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}h ${mins}m ${secs}s`;
+    } else if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
+  } catch {
+    return null;
+  }
 }
 
-export async function runDeepResearch(
-    params: RunDeepResearchParams
-): Promise<DeepResearchOutput> {
-    const { ai, agent, timeoutSeconds, pollIntervalSeconds, input } = params;
-    const { prompt, include_citations } = deepResearchInput.parse(input);
+/**
+ * Format error details if the interaction failed.
+ */
+export function formatErrorDetail(interaction: Interaction): string | null {
+  const error = interaction?.error;
+  if (!error) return null;
+  const code = error.code;
+  const message = error.message;
+  if (code && message) {
+    return `Error ${code} - ${message}`;
+  }
+  if (message) {
+    return String(message);
+  }
+  if (code) {
+    return `Error ${code}`;
+  }
+  return null;
+}
 
-    if (!prompt.trim()) {
-        throw new Error("`prompt` is required");
-    }
+// --- Tool Implementations ---
 
-    // 1. Start the Deep Research Agent
-    const initialInteraction = (await ai.interactions.create({
-        input: prompt.trim(),
-        agent,
-        background: true
-    })) as Interaction;
+export interface RunStartDeepResearchParams {
+  ai: GoogleGenAI;
+  agent: string;
+  input: StartDeepResearchInput;
+}
 
-    const jobId = initialInteraction.id;
-    if (!jobId) {
-        throw new Error("Gemini SDK did not return a research job id.");
-    }
+export async function runStartDeepResearch(
+  params: RunStartDeepResearchParams
+): Promise<StartResearchOutput> {
+  const { ai, agent, input } = params;
+  const parsed = startDeepResearchInput.parse(input);
+  const prompt = parsed.prompt.trim();
+  if (!prompt) {
+    throw new Error("`prompt` is required");
+  }
 
-    // 2. Poll for results
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    let interaction: Interaction = initialInteraction;
+  const initialInteraction = (await ai.interactions.create({
+    input: prompt,
+    agent,
+    background: true,
+    store: true
+  })) as Interaction;
 
-    while (true) {
-        interaction = (await ai.interactions.get(jobId)) as Interaction;
-        const status = interaction.status;
+  const jobId = initialInteraction?.id;
+  if (!jobId) {
+    throw new Error("Gemini SDK did not return a research job id.");
+  }
 
-        if (status === "completed" || status === "failed" || status === "cancelled") {
-            break;
-        }
+  const status = initialInteraction?.status || "in_progress";
+  return {
+    job_id: String(jobId),
+    status: String(status)
+  };
+}
 
-        if (Date.now() >= deadline) {
-            break;
-        }
+export interface RunCheckDeepResearchParams {
+  ai: GoogleGenAI;
+  input: CheckDeepResearchInput;
+}
 
-        await sleep(pollIntervalSeconds * 1000);
-    }
+export async function runCheckDeepResearch(
+  params: RunCheckDeepResearchParams
+): Promise<CheckResearchOutput> {
+  const { ai, input } = params;
+  const parsed = checkDeepResearchInput.parse(input);
+  const jobId = parsed.job_id.trim();
+  if (!jobId) {
+    throw new Error("`job_id` is required");
+  }
 
-    // 3. Extract text from outputs
-    let reportText = outputsToText(interaction.outputs, include_citations);
+  const interaction = (await ai.interactions.get(jobId)) as Interaction;
+  if (!interaction) {
+    throw new Error(`No research job found for ID: ${jobId}`);
+  }
 
-    // 4. Resolve redirect URLs if citations are enabled
-    if (include_citations) {
-        reportText = await resolveSourcesInText(reportText);
-    }
+  const status = String(interaction.status || "unknown");
 
+  if (status === "completed") {
+    const reportText = await extractInteractionResult(interaction, parsed.include_citations);
     return {
-        status: interaction.status ?? "unknown",
-        report_text: reportText
+      job_id: jobId,
+      status: "completed",
+      report_text: reportText
     };
+  }
+
+  if (status === "in_progress") {
+    const payload: CheckResearchOutput = {
+      job_id: jobId,
+      status: "in_progress"
+    };
+    const uptime = formatUptime(interaction.created);
+    if (uptime) {
+      payload.uptime = uptime;
+    }
+    return payload;
+  }
+
+  if (status === "failed" || status === "cancelled") {
+    const payload: CheckResearchOutput = {
+      job_id: jobId,
+      status
+    };
+    const errorDetail = formatErrorDetail(interaction);
+    if (errorDetail) {
+      payload.error = errorDetail;
+    }
+    return payload;
+  }
+
+  // Other statuses (e.g. unknown)
+  const reportText = await extractInteractionResult(interaction, parsed.include_citations);
+  const payload: CheckResearchOutput = {
+    job_id: jobId,
+    status
+  };
+  if (reportText) {
+    payload.report_text = reportText;
+  }
+  return payload;
 }

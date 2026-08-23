@@ -192,7 +192,7 @@ Then use `gemini-web-mcp` as the command instead of `npx -y gemini-web-mcp` in y
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `GEMINI_API_KEY` | ✓ | — | Your [Gemini API key](https://aistudio.google.com/apikey) (also supports `GOOGLE_API_KEY` fallback) |
-| `GEMINI_WEBSEARCH_MODEL` | | `gemini-3.5-flash` | Model for web search |
+| `GEMINI_WEBSEARCH_MODEL` | | `gemini-3.7-flash` | Model for web search |
 | `GEMINI_DEEP_RESEARCH_AGENT` | | `deep-research-preview-04-2026` | Deep Research agent name (`deep-research-preview-04-2026` for standard speed, `deep-research-max-preview-04-2026` for maximum thoroughness) |
 | `GEMINI_IMAGE_MODEL` | | `gemini-3.1-flash-image` | Image generation model |
 | `LOG_LEVEL` | | `info` | Logging level (`debug`, `info`, `warn`, `error`) |

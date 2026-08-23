@@ -3,7 +3,7 @@ import { z } from "zod";
 const configSchema = z.object({
   GEMINI_API_KEY: z.string().min(1).optional(),
   GOOGLE_API_KEY: z.string().min(1).optional(),
-  GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3.5-flash"),
+  GEMINI_WEBSEARCH_MODEL: z.string().min(1).default("gemini-3.7-flash"),
 
   GEMINI_DEEP_RESEARCH_AGENT: z.string().min(1).default("deep-research-preview-04-2026"),
 

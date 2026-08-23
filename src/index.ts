@@ -61,7 +61,7 @@ registerToolCompat(
   {
     title: "Read URL Content",
     description:
-      "Fetch content from a URL via HTTP request. Converts HTML to markdown. " +
+      "Fetch content from a URL via HTTP request. Supports HTML, PDF, JSON, Markdown, Plain Text, CSV, and XML/RSS feeds, converting them to clean markdown. " +
       "No JavaScript execution, no authentication. For pages requiring login or JavaScript, " +
       "consider alternatives. Returns content directly if small, or chunk summaries with positions " +
       "for large pages - use view_content_chunk to read specific chunks by position. " +

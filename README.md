@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/gemini-web-mcp)](https://www.npmjs.com/package/gemini-web-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js)](https://nodejs.org/)
 
 An MCP server that brings **Gemini-powered web tools** to your AI coding assistant—web search, content extraction, deep research, and image generation.
 
@@ -11,7 +11,7 @@ An MCP server that brings **Gemini-powered web tools** to your AI coding assista
 | Tool | Description |
 |------|-------------|
 | **`search_web`** | Web search with AI-synthesized summaries and citations |
-| **`read_url_content`** | Extract and convert web pages to clean markdown |
+| **`read_url_content`** | Extract and convert web content (HTML, PDF, JSON, Markdown, Plain Text, CSV, XML/RSS) to clean markdown |
 | **`view_content_chunk`** | Navigate large documents chunk by chunk |
 | **`start_deep_research`** | Initiate multi-step background research with Gemini's Deep Research Agent |
 | **`check_deep_research`** | Check status, uptime, error details, and retrieve synthesized research report |
@@ -35,7 +35,7 @@ An MCP server that brings **Gemini-powered web tools** to your AI coding assista
 
 ### Using npx (Recommended)
 
-Requires [Node.js](https://nodejs.org/) 18+.
+Requires [Node.js](https://nodejs.org/) 22+ (Node.js 22 LTS or newer).
 
 ```bash
 npx gemini-web-mcp
@@ -215,7 +215,7 @@ Performs a web search and returns an AI-synthesized summary with citations.
 
 ### `read_url_content`
 
-Fetches a URL and converts its content to clean markdown. Returns chunk summaries for navigation.
+Fetches a URL and converts its content to clean markdown. Supports **HTML**, **PDF**, **JSON**, **Markdown**, **Plain Text**, **CSV**, and **XML/RSS**. Returns chunk summaries for navigation.
 
 | Parameter | Type | Required | Description |
 |-----------|------|:--------:|-------------|

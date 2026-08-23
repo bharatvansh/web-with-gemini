@@ -2,12 +2,23 @@ import { z } from "zod";
 import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import { NodeHtmlMarkdown } from "node-html-markdown";
+import { extractText, getDocumentProxy } from "unpdf";
 
 // ─────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────
 
-interface DocumentChunk {
+export type ContentFormat =
+    | "html"
+    | "pdf"
+    | "json"
+    | "markdown"
+    | "plain_text"
+    | "csv"
+    | "xml"
+    | "rss_atom";
+
+export interface DocumentChunk {
     position: number;
     headers: string[];
     content: string;
@@ -16,7 +27,7 @@ interface DocumentChunk {
     hasOverlap: boolean;
 }
 
-interface StoredDocument {
+export interface StoredDocument {
     url: string;
     title: string;
     excerpt: string;
@@ -24,6 +35,16 @@ interface StoredDocument {
     chunks: DocumentChunk[];
     fetchedAt: Date;
     isReaderable: boolean;
+    format: ContentFormat;
+}
+
+export interface ExtractedContent {
+    title: string;
+    excerpt: string;
+    byline: string;
+    markdown: string;
+    isReaderable: boolean;
+    format: ContentFormat;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -51,7 +72,7 @@ function cleanupExpiredDocuments(): void {
 }
 
 // ─────────────────────────────────────────────────────────────
-// HTML to Markdown converter (for post-Readability processing)
+// HTML to Markdown converter
 // ─────────────────────────────────────────────────────────────
 
 const nhm = new NodeHtmlMarkdown({
@@ -78,14 +99,13 @@ const JUNK_HEADERS = new Set([
     "note", "warning", "tip", "info", "caution"
 ]);
 
-function isJunkHeader(text: string): boolean {
+export function isJunkHeader(text: string): boolean {
     const normalized = text.toLowerCase().trim();
 
     // Too short
     if (normalized.length < 3) return true;
 
     // Too long - real headers are typically short
-    // "The media_resolution parameter is currently only available..." is NOT a header
     if (normalized.length > 60) return true;
 
     // Known junk words
@@ -110,16 +130,695 @@ function isJunkHeader(text: string): boolean {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Format Detection
+// ─────────────────────────────────────────────────────────────
+
+export function detectContentFormat(contentTypeHeader: string, urlStr: string): ContentFormat | "unsupported" {
+    const contentType = (contentTypeHeader || "").toLowerCase().trim();
+    let pathname = "";
+    try {
+        pathname = new URL(urlStr).pathname.toLowerCase();
+    } catch {
+        pathname = urlStr.toLowerCase();
+    }
+
+    // 1. PDF
+    if (contentType.includes("application/pdf") || pathname.endsWith(".pdf")) {
+        return "pdf";
+    }
+
+    // 2. JSON
+    if (
+        contentType.includes("application/json") ||
+        contentType.includes("text/json") ||
+        contentType.includes("+json") ||
+        pathname.endsWith(".json")
+    ) {
+        return "json";
+    }
+
+    // 3. Markdown
+    if (
+        contentType.includes("text/markdown") ||
+        contentType.includes("text/x-markdown") ||
+        pathname.endsWith(".md") ||
+        pathname.endsWith(".markdown")
+    ) {
+        return "markdown";
+    }
+
+    // 4. CSV / TSV
+    if (
+        contentType.includes("text/csv") ||
+        contentType.includes("text/tab-separated-values") ||
+        pathname.endsWith(".csv") ||
+        pathname.endsWith(".tsv")
+    ) {
+        return "csv";
+    }
+
+    // 5. RSS / Atom
+    if (
+        contentType.includes("application/rss+xml") ||
+        contentType.includes("application/atom+xml") ||
+        pathname.endsWith(".rss") ||
+        pathname.endsWith(".atom")
+    ) {
+        return "rss_atom";
+    }
+
+    // 6. XML
+    if (
+        contentType.includes("application/xml") ||
+        contentType.includes("text/xml") ||
+        contentType.includes("+xml") ||
+        pathname.endsWith(".xml")
+    ) {
+        return "xml";
+    }
+
+    // 7. HTML / XHTML
+    if (
+        contentType.includes("text/html") ||
+        contentType.includes("application/xhtml+xml") ||
+        pathname.endsWith(".html") ||
+        pathname.endsWith(".htm")
+    ) {
+        return "html";
+    }
+
+    // 8. Plain Text / Code extensions
+    const codeOrTextExtensions = [
+        ".txt", ".text", ".log", ".env", ".yaml", ".yml", ".toml", ".ini", ".conf",
+        ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+        ".py", ".pyw", ".go", ".rs", ".java", ".kt", ".c", ".cpp", ".h", ".hpp",
+        ".cs", ".rb", ".php", ".sh", ".bash", ".zsh", ".sql", ".css", ".scss"
+    ];
+    if (
+        contentType.includes("text/plain") ||
+        codeOrTextExtensions.some(ext => pathname.endsWith(ext))
+    ) {
+        return "plain_text";
+    }
+
+    // 9. Unsupported binary types
+    if (
+        contentType.startsWith("image/") ||
+        contentType.startsWith("video/") ||
+        contentType.startsWith("audio/") ||
+        contentType.includes("application/zip") ||
+        contentType.includes("application/gzip") ||
+        contentType.includes("application/x-tar") ||
+        contentType.includes("application/octet-stream")
+    ) {
+        return "unsupported";
+    }
+
+    // Fallback: if text/*, treat as plain text; otherwise try html
+    if (contentType.startsWith("text/")) {
+        return "plain_text";
+    }
+
+    return "html";
+}
+
+// ─────────────────────────────────────────────────────────────
+// Format Parsers
+// ─────────────────────────────────────────────────────────────
+
+export async function parsePdfContent(buffer: ArrayBuffer | Uint8Array, url: string): Promise<ExtractedContent> {
+    const uint8Array = buffer instanceof Uint8Array
+        ? new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+        : new Uint8Array(buffer);
+    const pdf = await getDocumentProxy(uint8Array);
+    try {
+        const totalPages = pdf.numPages;
+        const { text } = await extractText(pdf, { mergePages: false });
+
+        let title = "";
+        let byline = "";
+        let subject = "";
+
+        try {
+            const meta = await pdf.getMetadata();
+            const info = meta?.info as Record<string, unknown> | undefined;
+            if (info) {
+                if (typeof info.Title === "string" && info.Title.trim()) {
+                    title = info.Title.trim();
+                }
+                if (typeof info.Author === "string" && info.Author.trim()) {
+                    byline = info.Author.trim();
+                }
+                if (typeof info.Subject === "string" && info.Subject.trim()) {
+                    subject = info.Subject.trim();
+                }
+            }
+        } catch {
+            // Silently continue if metadata extraction fails
+        }
+
+        if (!title) {
+            title = extractFilenameFromUrl(url) || "PDF Document";
+        }
+
+        const pages = Array.isArray(text) ? text : [text];
+        const markdownParts: string[] = [];
+
+        pages.forEach((pageText, idx) => {
+            const pageNum = idx + 1;
+            const cleanedPage = cleanPdfPageText(pageText);
+            if (cleanedPage) {
+                if (totalPages > 1) {
+                    markdownParts.push(`### Page ${pageNum}\n\n${cleanedPage}`);
+                } else {
+                    markdownParts.push(cleanedPage);
+                }
+            }
+        });
+
+        const markdown = markdownParts.join("\n\n") || "_No readable text extracted from PDF._";
+        const excerpt = subject || (pages[0] ? pages[0].slice(0, 200).replace(/\s+/g, " ").trim() + "..." : `PDF document (${totalPages} pages)`);
+
+        return {
+            title,
+            excerpt,
+            byline,
+            markdown,
+            isReaderable: true,
+            format: "pdf"
+        };
+    } finally {
+        await pdf.loadingTask.destroy();
+    }
+}
+
+function cleanPdfPageText(pageText: string): string {
+    return pageText
+        .replace(/\r\n/g, "\n")
+        .replace(/\f/g, "\n\n")
+        .replace(/\t/g, "  ")
+        .replace(/[^\S\r\n]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+export function parseJsonContent(text: string, url: string): ExtractedContent {
+    let parsed: any;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        // If malformed JSON, treat as plain text
+        return parsePlainTextContent(text, url);
+    }
+
+    let title = extractFilenameFromUrl(url) || "JSON Data";
+    let excerpt = "";
+    let byline = "";
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        if (typeof parsed.name === "string" && parsed.name.trim()) title = parsed.name.trim();
+        else if (typeof parsed.title === "string" && parsed.title.trim()) title = parsed.title.trim();
+
+        if (typeof parsed.description === "string" && parsed.description.trim()) excerpt = parsed.description.trim();
+        else if (typeof parsed.summary === "string" && parsed.summary.trim()) excerpt = parsed.summary.trim();
+
+        if (typeof parsed.author === "string" && parsed.author.trim()) byline = parsed.author.trim();
+        else if (typeof parsed.author?.name === "string" && parsed.author.name.trim()) byline = parsed.author.name.trim();
+    }
+
+    const formattedJson = JSON.stringify(parsed, null, 2);
+    const lineCount = formattedJson.split("\n").length;
+    const isArray = Array.isArray(parsed);
+    const keyCount = isArray ? parsed.length : (parsed && typeof parsed === "object" ? Object.keys(parsed).length : 1);
+
+    if (!excerpt) {
+        excerpt = isArray
+            ? `JSON Array with ${keyCount} items (${lineCount} lines)`
+            : `JSON Object with ${keyCount} fields (${lineCount} lines)`;
+    }
+
+    const markdown = "```json\n" + formattedJson + "\n```";
+
+    return {
+        title,
+        excerpt,
+        byline,
+        markdown,
+        isReaderable: true,
+        format: "json"
+    };
+}
+
+export function parseMarkdownContent(text: string, url: string): ExtractedContent {
+    let title = "";
+    let excerpt = "";
+
+    // Find first # Heading
+    const headingMatch = text.match(/^#\s+(.+)$/m);
+    if (headingMatch) {
+        title = headingMatch[1].trim();
+    } else {
+        title = extractFilenameFromUrl(url) || "Markdown Document";
+    }
+
+    // Find first non-heading paragraph for excerpt
+    const paragraphs = text.split(/\n\s*\n/);
+    for (const p of paragraphs) {
+        const trimmed = p.trim();
+        if (trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("```") && trimmed.length > 20) {
+            excerpt = trimmed.replace(/\n/g, " ").slice(0, 200);
+            if (trimmed.length > 200) excerpt += "...";
+            break;
+        }
+    }
+
+    return {
+        title,
+        excerpt,
+        byline: "",
+        markdown: cleanMarkdown(text),
+        isReaderable: true,
+        format: "markdown"
+    };
+}
+
+export function parseCsvContent(text: string, url: string, delimiter = ","): ExtractedContent {
+    const sourceText = text.replace(/^\uFEFF/, "");
+    const title = extractFilenameFromUrl(url) || "CSV Dataset";
+
+    if (sourceText.trim().length === 0) {
+        return {
+            title,
+            excerpt: "Empty CSV data",
+            byline: "",
+            markdown: "_Empty CSV data._",
+            isReaderable: true,
+            format: "csv"
+        };
+    }
+
+    let isTsvPath = false;
+    try {
+        isTsvPath = new URL(url).pathname.toLowerCase().endsWith(".tsv");
+    } catch {
+        // Use content-based delimiter detection for non-URL callers.
+    }
+
+    const isTsv = delimiter === "\t" || isTsvPath || (!sourceText.includes(",") && sourceText.includes("\t"));
+    const actualDelimiter = isTsv ? "\t" : delimiter;
+
+    const parsedRows = parseCsvRecords(sourceText, actualDelimiter);
+
+    let markdown = "";
+    if (parsedRows.length > 0 && parsedRows[0].length <= 30 && parsedRows.length <= 500) {
+        markdown = formatCsvAsMarkdownTable(parsedRows);
+    } else {
+        markdown = `*Dataset contains ${parsedRows.length} rows and ${parsedRows[0]?.length || 0} columns.*\n\n\`\`\`csv\n${sourceText.slice(0, 15000)}\n\`\`\``;
+        if (sourceText.length > 15000) {
+            markdown += `\n\n*(Truncated preview from ${sourceText.length} characters)*`;
+        }
+    }
+
+    const excerpt = `CSV Table: ${parsedRows.length} rows × ${parsedRows[0]?.length || 0} columns`;
+
+    return {
+        title,
+        excerpt,
+        byline: "",
+        markdown,
+        isReaderable: true,
+        format: "csv"
+    };
+}
+
+export function parseCsvRecords(text: string, delimiter: string): string[][] {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    let rowHasContent = false;
+
+    const finishRow = () => {
+        row.push(current.trim());
+        if (rowHasContent) {
+            rows.push(row);
+        }
+        row = [];
+        current = "";
+        rowHasContent = false;
+    };
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+
+        if (char === '"') {
+            if (inQuotes && text[i + 1] === '"') {
+                current += '"';
+                rowHasContent = true;
+                i++;
+            } else {
+                inQuotes = !inQuotes;
+                rowHasContent = true;
+            }
+        } else if (char === delimiter && !inQuotes) {
+            row.push(current.trim());
+            current = "";
+            rowHasContent = true;
+        } else if ((char === "\n" || char === "\r") && !inQuotes) {
+            finishRow();
+            if (char === "\r" && text[i + 1] === "\n") {
+                i++;
+            }
+        } else {
+            current += char;
+            if (char.trim().length > 0) {
+                rowHasContent = true;
+            }
+        }
+    }
+
+    if (rowHasContent || row.length > 0 || current.length > 0) {
+        finishRow();
+    }
+
+    return rows;
+}
+
+export function parseCsvLine(line: string, delimiter: string): string[] {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+                current += '"';
+                i++;
+            } else {
+                inQuotes = !inQuotes;
+            }
+        } else if (char === delimiter && !inQuotes) {
+            result.push(current.trim());
+            current = "";
+        } else {
+            current += char;
+        }
+    }
+    result.push(current.trim());
+    return result;
+}
+
+export function formatCsvAsMarkdownTable(rows: string[][]): string {
+    if (rows.length === 0) return "";
+    const headers = rows[0];
+    const dataRows = rows.slice(1);
+
+    const escapeCell = (cell: string) => cell.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+
+    const headerLine = "| " + headers.map(escapeCell).join(" | ") + " |";
+    const separatorLine = "| " + headers.map(() => "---").join(" | ") + " |";
+
+    const bodyLines = dataRows.map(row => {
+        const paddedRow = headers.map((_, i) => row[i] !== undefined ? row[i] : "");
+        return "| " + paddedRow.map(escapeCell).join(" | ") + " |";
+    });
+
+    return [headerLine, separatorLine, ...bodyLines].join("\n");
+}
+
+export function parseXmlContent(text: string, url: string, isAtomHint = false): ExtractedContent {
+    const title = extractFilenameFromUrl(url) || "XML Document";
+
+    // Detect if this is RSS / Atom feed
+    const isRss = /<rss(?:\s|>)/i.test(text) || /<channel(?:\s|>)/i.test(text);
+    const isAtom = isAtomHint || (/<feed(?:\s|>)/i.test(text) && /http:\/\/www\.w3\.org\/2005\/Atom/i.test(text));
+
+    if (isRss || isAtom) {
+        return parseRssOrAtomFeed(text, url, isAtom);
+    }
+
+    const lineCount = text.split("\n").length;
+    return {
+        title,
+        excerpt: `XML Document (${lineCount} lines)`,
+        byline: "",
+        markdown: "```xml\n" + text.trim() + "\n```",
+        isReaderable: true,
+        format: "xml"
+    };
+}
+
+export function parseRssOrAtomFeed(xmlText: string, url: string, isAtom: boolean): ExtractedContent {
+    let feedTitle = "";
+    let feedDescription = "";
+    const items: Array<{ title: string; link: string; date?: string; summary?: string }> = [];
+
+    try {
+        const dom = new JSDOM(xmlText, { contentType: "text/xml" });
+        const doc = dom.window.document;
+
+        if (isAtom) {
+            feedTitle = doc.querySelector("feed > title")?.textContent?.trim() || "";
+            feedDescription = doc.querySelector("feed > subtitle")?.textContent?.trim() || "";
+
+            const entries = doc.querySelectorAll("entry");
+            entries.forEach(entry => {
+                const itemTitle = entry.querySelector("title")?.textContent?.trim() || "Untitled";
+                const linkElem = entry.querySelector("link");
+                const itemLink = linkElem?.getAttribute("href") || linkElem?.textContent?.trim() || "";
+                const date = entry.querySelector("updated")?.textContent?.trim() || entry.querySelector("published")?.textContent?.trim() || "";
+                const summary = entry.querySelector("summary")?.textContent?.trim() || entry.querySelector("content")?.textContent?.trim() || "";
+
+                items.push({
+                    title: itemTitle,
+                    link: itemLink,
+                    date: date ? new Date(date).toLocaleDateString() : undefined,
+                    summary: summary.slice(0, 150)
+                });
+            });
+        } else {
+            feedTitle = doc.querySelector("channel > title")?.textContent?.trim() || "";
+            feedDescription = doc.querySelector("channel > description")?.textContent?.trim() || "";
+
+            const itemNodes = doc.querySelectorAll("item");
+            itemNodes.forEach(item => {
+                const itemTitle = item.querySelector("title")?.textContent?.trim() || "Untitled";
+                const itemLink = item.querySelector("link")?.textContent?.trim() || "";
+                const date = item.querySelector("pubDate")?.textContent?.trim() || "";
+                const desc = item.querySelector("description")?.textContent?.trim() || "";
+
+                items.push({
+                    title: itemTitle,
+                    link: itemLink,
+                    date: date ? new Date(date).toLocaleDateString() : undefined,
+                    summary: desc ? cleanMarkdown(nhm.translate(desc)).slice(0, 150) : undefined
+                });
+            });
+        }
+    } catch {
+        return {
+            title: extractFilenameFromUrl(url) || "XML Feed",
+            excerpt: "RSS/Atom Feed",
+            byline: "",
+            markdown: "```xml\n" + xmlText.trim() + "\n```",
+            isReaderable: true,
+            format: "rss_atom"
+        };
+    }
+
+    if (!feedTitle) {
+        feedTitle = extractFilenameFromUrl(url) || "RSS Feed";
+    }
+
+    const markdownParts: string[] = [];
+    markdownParts.push(`# ${feedTitle}`);
+    if (feedDescription) {
+        markdownParts.push(`*${feedDescription}*\n`);
+    }
+
+    markdownParts.push(`## Feed Items (${items.length})\n`);
+    items.forEach((item, index) => {
+        let entry = `${index + 1}. **[${item.title}](${item.link || url})**`;
+        if (item.date) entry += ` — *${item.date}*`;
+        if (item.summary) entry += `\n   > ${item.summary}`;
+        markdownParts.push(entry);
+    });
+
+    return {
+        title: feedTitle,
+        excerpt: feedDescription || `Feed with ${items.length} items`,
+        byline: "",
+        markdown: markdownParts.join("\n\n"),
+        isReaderable: true,
+        format: "rss_atom"
+    };
+}
+
+export function parsePlainTextContent(text: string, url: string): ExtractedContent {
+    const title = extractFilenameFromUrl(url) || "Plain Text Document";
+    const lineCount = text.split("\n").length;
+    const isCode = isLikelyCode(url, text);
+
+    let markdown = "";
+    if (isCode) {
+        const lang = getLanguageFromUrl(url);
+        markdown = `\`\`\`${lang}\n${text.trim()}\n\`\`\``;
+    } else {
+        markdown = text.trim();
+    }
+
+    const excerpt = `Text document (${lineCount} lines, ${text.length} characters)`;
+
+    return {
+        title,
+        excerpt,
+        byline: "",
+        markdown,
+        isReaderable: true,
+        format: "plain_text"
+    };
+}
+
+export function parseHtmlContent(html: string, url: string): ExtractedContent {
+    const dom = new JSDOM(html, { url });
+    const document = dom.window.document;
+
+    const isReaderable = isProbablyReaderable(document);
+
+    const reader = new Readability(document.cloneNode(true) as Document);
+    const article = reader.parse();
+
+    let title: string;
+    let excerpt: string;
+    let byline: string;
+    let markdown: string;
+
+    if (article) {
+        title = article.title || extractFallbackTitle(html, url);
+        excerpt = article.excerpt || "";
+        byline = article.byline || "";
+        markdown = nhm.translate(article.content || "");
+    } else {
+        title = extractFallbackTitle(html, url);
+        excerpt = extractMetaDescription(html);
+        byline = "";
+        markdown = nhm.translate(html);
+    }
+
+    return {
+        title,
+        excerpt,
+        byline,
+        markdown: cleanMarkdown(markdown),
+        isReaderable,
+        format: "html"
+    };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Format Helpers
+// ─────────────────────────────────────────────────────────────
+
+function getLanguageFromUrl(urlStr: string): string {
+    try {
+        const pathname = new URL(urlStr).pathname;
+        const ext = pathname.split(".").pop()?.toLowerCase() || "";
+        const langMap: Record<string, string> = {
+            js: "javascript",
+            mjs: "javascript",
+            cjs: "javascript",
+            ts: "typescript",
+            mts: "typescript",
+            cts: "typescript",
+            jsx: "jsx",
+            tsx: "tsx",
+            py: "python",
+            pyw: "python",
+            go: "go",
+            rs: "rust",
+            java: "java",
+            kt: "kotlin",
+            c: "c",
+            cpp: "cpp",
+            h: "c",
+            hpp: "cpp",
+            cs: "csharp",
+            rb: "ruby",
+            php: "php",
+            sh: "bash",
+            bash: "bash",
+            zsh: "bash",
+            yaml: "yaml",
+            yml: "yaml",
+            toml: "toml",
+            ini: "ini",
+            conf: "ini",
+            sql: "sql",
+            html: "html",
+            css: "css",
+            scss: "scss",
+            json: "json",
+            xml: "xml",
+            md: "markdown"
+        };
+        return langMap[ext] || "";
+    } catch {
+        return "";
+    }
+}
+
+function isLikelyCode(urlStr: string, text: string): boolean {
+    const lang = getLanguageFromUrl(urlStr);
+    if (lang && lang !== "markdown") return true;
+    if (
+        text.startsWith("#!") ||
+        text.startsWith("<?php") ||
+        text.startsWith("import ") ||
+        text.startsWith("package ")
+    ) {
+        return true;
+    }
+    return false;
+}
+
+export function extractFilenameFromUrl(urlStr: string): string {
+    try {
+        const parsed = new URL(urlStr);
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        const last = segments[segments.length - 1];
+        if (last && last.length > 0) {
+            return decodeURIComponent(last);
+        }
+        return parsed.hostname;
+    } catch {
+        return urlStr;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
 // read_url_content
 // ─────────────────────────────────────────────────────────────
 
 export const readUrlContentInput = {
-    Url: z.string().url().describe("URL to read content from")
+    Url: z.string().url().describe("URL to read content from (supports HTML, PDF, JSON, Markdown, Plain Text, CSV, XML/RSS)")
 };
 
 export type ReadUrlContentArgs = {
     Url: string;
 };
+
+function isAtomFeedResponse(contentTypeHeader: string, url: string): boolean {
+    if (contentTypeHeader.toLowerCase().includes("application/atom+xml")) {
+        return true;
+    }
+
+    try {
+        return new URL(url).pathname.toLowerCase().endsWith(".atom");
+    } catch {
+        return false;
+    }
+}
 
 export async function runReadUrlContent(params: {
     input: ReadUrlContentArgs;
@@ -137,9 +836,9 @@ export async function runReadUrlContent(params: {
     // Fetch the URL
     const response = await fetch(Url, {
         headers: {
-            "User-Agent": "Mozilla/5.0 (compatible; GeminiWebMCP/1.0; +https://github.com/user/gemini-web-mcp)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.9,text/plain;q=0.8,text/markdown;q=0.8,application/json;q=0.8,text/csv;q=0.8,*/*;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
         },
         redirect: "follow",
     });
@@ -148,49 +847,44 @@ export async function runReadUrlContent(params: {
         throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
     }
 
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
-        throw new Error(`Unsupported content type: ${contentType}. Only HTML pages are supported.`);
+    const contentTypeHeader = response.headers.get("content-type") || "";
+    const format = detectContentFormat(contentTypeHeader, Url);
+
+    if (format === "unsupported") {
+        throw new Error(`Unsupported content type: ${contentTypeHeader || "unknown"}. Supported formats: HTML, PDF, JSON, Markdown, Plain Text, CSV, XML/RSS.`);
     }
 
-    const html = await response.text();
+    let extracted: ExtractedContent;
 
-    // Parse HTML with JSDOM
-    const dom = new JSDOM(html, { url: Url });
-    const document = dom.window.document;
-
-    // Check if page is readable
-    const isReaderable = isProbablyReaderable(document);
-
-    // Extract main content using Readability
-    const reader = new Readability(document.cloneNode(true) as Document);
-    const article = reader.parse();
-
-    let title: string;
-    let excerpt: string;
-    let byline: string;
-    let markdown: string;
-
-    if (article) {
-        // Readability succeeded - use its clean output
-        title = article.title || extractFallbackTitle(html, Url);
-        excerpt = article.excerpt || "";
-        byline = article.byline || "";
-
-        // Convert the clean HTML content to markdown
-        markdown = nhm.translate(article.content || "");
+    if (format === "pdf") {
+        const arrayBuffer = await response.arrayBuffer();
+        extracted = await parsePdfContent(arrayBuffer, Url);
     } else {
-        // Readability failed - fall back to full HTML conversion
-        title = extractFallbackTitle(html, Url);
-        excerpt = extractMetaDescription(html);
-        byline = "";
+        const text = await response.text();
 
-        // Convert full HTML (less ideal but better than nothing)
-        markdown = nhm.translate(html);
+        // If detected as HTML, double check if it might actually be JSON or XML or Markdown
+        if (format === "html") {
+            const trimmed = text.trim();
+            if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+                extracted = parseJsonContent(text, Url);
+            } else {
+                extracted = parseHtmlContent(text, Url);
+            }
+        } else if (format === "json") {
+            extracted = parseJsonContent(text, Url);
+        } else if (format === "markdown") {
+            extracted = parseMarkdownContent(text, Url);
+        } else if (format === "csv") {
+            extracted = parseCsvContent(text, Url);
+        } else if (format === "xml" || format === "rss_atom") {
+            extracted = parseXmlContent(text, Url, isAtomFeedResponse(contentTypeHeader, Url));
+        } else {
+            extracted = parsePlainTextContent(text, Url);
+        }
     }
 
     // Clean up the markdown
-    const cleanedContent = cleanMarkdown(markdown);
+    const cleanedContent = cleanMarkdown(extracted.markdown);
 
     // Create chunks with overlap
     const chunks = createChunksWithOverlap(cleanedContent);
@@ -198,12 +892,13 @@ export async function runReadUrlContent(params: {
     // Store the document
     const storedDoc: StoredDocument = {
         url: Url,
-        title,
-        excerpt,
-        byline,
+        title: extracted.title,
+        excerpt: extracted.excerpt,
+        byline: extracted.byline,
         chunks,
         fetchedAt: new Date(),
-        isReaderable
+        isReaderable: extracted.isReaderable,
+        format: extracted.format
     };
     documentStore.set(Url, storedDoc);
 
@@ -214,7 +909,7 @@ export async function runReadUrlContent(params: {
 // Metadata extraction helpers
 // ─────────────────────────────────────────────────────────────
 
-function extractFallbackTitle(html: string, url: string): string {
+export function extractFallbackTitle(html: string, url: string): string {
     const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
     if (titleMatch) {
         return decodeHtmlEntities(titleMatch[1].trim());
@@ -226,7 +921,7 @@ function extractFallbackTitle(html: string, url: string): string {
     }
 }
 
-function extractMetaDescription(html: string): string {
+export function extractMetaDescription(html: string): string {
     // Try OG description first
     const ogDescMatch = html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']*?)["']/i)
         || html.match(/<meta[^>]*content=["']([^"']*?)["'][^>]*property=["']og:description["']/i);
@@ -246,7 +941,7 @@ function extractMetaDescription(html: string): string {
     return "";
 }
 
-function decodeHtmlEntities(text: string): string {
+export function decodeHtmlEntities(text: string): string {
     return text
         .replace(/&amp;/g, "&")
         .replace(/&lt;/g, "<")
@@ -262,11 +957,10 @@ function decodeHtmlEntities(text: string): string {
 // Markdown cleanup
 // ─────────────────────────────────────────────────────────────
 
-function cleanMarkdown(markdown: string): string {
+export function cleanMarkdown(markdown: string): string {
     return markdown
-        // Remove any leftover HTML artifacts
+        // Remove any leftover HTML doctype artifacts
         .replace(/<!doctype[^>]*>/gi, "")
-        .replace(/<[^>]+>/g, "")
         // Remove skip links and navigation artifacts
         .replace(/\[Skip to [^\]]+\]\s*\([^)]+\)/gi, "")
         .replace(/\[#[^\]]*\]/g, "")
@@ -276,8 +970,6 @@ function cleanMarkdown(markdown: string): string {
         // Clean up excessive whitespace
         .replace(/\n{3,}/g, "\n\n")
         .replace(/^\s+$/gm, "")
-        // Remove orphaned code fences
-        .replace(/^```\s*$/gm, "")
         .trim();
 }
 
@@ -285,7 +977,7 @@ function cleanMarkdown(markdown: string): string {
 // Chunking with overlap and semantic boundaries
 // ─────────────────────────────────────────────────────────────
 
-function createChunksWithOverlap(content: string): DocumentChunk[] {
+export function createChunksWithOverlap(content: string): DocumentChunk[] {
     const chunks: DocumentChunk[] = [];
     const lines = content.split("\n");
 
@@ -294,21 +986,52 @@ function createChunksWithOverlap(content: string): DocumentChunk[] {
     let currentCharCount = 0;
     let previousChunkEnd = ""; // For overlap
 
-    // Track code blocks to never split inside them
+    // Track code blocks and preserve fence pairs when splitting
     let inCodeBlock = false;
+    let codeFenceLanguage = "";
+
+    const flushCurrentChunk = (): void => {
+        const chunkContent = currentChunk.join("\n").trim();
+
+        if (chunkContent) {
+            const hasOverlap = chunks.length > 0 && previousChunkEnd.length > 0;
+            const contentWithContext = hasOverlap
+                ? previousChunkEnd + "\n\n" + chunkContent
+                : chunkContent;
+
+            chunks.push({
+                position: chunks.length,
+                headers: [...currentHeaders],
+                content: contentWithContext,
+                summary: generateChunkSummary(chunkContent, currentHeaders),
+                charCount: contentWithContext.length,
+                hasOverlap
+            });
+
+            previousChunkEnd = extractOverlapText(chunkContent);
+        }
+
+        currentChunk = [];
+        currentCharCount = 0;
+    };
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
+        const isCodeFence = trimmed.startsWith("```");
 
         // Track code block boundaries
-        if (trimmed.startsWith("```")) {
+        const wasInCodeBlock = inCodeBlock;
+        if (isCodeFence) {
+            if (!wasInCodeBlock) {
+                codeFenceLanguage = trimmed.slice(3).trim();
+            }
             inCodeBlock = !inCodeBlock;
         }
 
-        // Track headers for context
+        // Track headers for context (outside code blocks)
         const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-        if (headerMatch && !inCodeBlock) {
+        if (headerMatch && !inCodeBlock && !isCodeFence) {
             const level = headerMatch[1].length;
             const headerText = headerMatch[2].trim();
 
@@ -319,73 +1042,49 @@ function createChunksWithOverlap(content: string): DocumentChunk[] {
             }
         }
 
-        const lineLength = line.length + 1;
+        currentChunk.push(line);
+        currentCharCount += line.length + 1;
 
-        // Determine if we should split here
+        // Determine if we should split after this line
         const atGoodBreakPoint = !inCodeBlock && (
-            headerMatch ||                          // Header boundary
+            headerMatch !== null ||                 // Header boundary
             trimmed === "" ||                       // Paragraph boundary  
-            /^[-*]\s/.test(trimmed) ||             // List item (can split between items)
+            /^[-*]\s/.test(trimmed) ||             // List item
+            (isCodeFence && wasInCodeBlock) ||     // Just completed a code block
             currentCharCount >= MAX_CHUNK_SIZE      // Hard limit
         );
 
         const shouldSplit = currentCharCount >= TARGET_CHUNK_SIZE && atGoodBreakPoint;
 
         if (shouldSplit && currentChunk.length > 0) {
-            const chunkContent = currentChunk.join("\n").trim();
-
-            if (chunkContent) {
-                // Add overlap from previous chunk end
-                const hasOverlap = chunks.length > 0 && previousChunkEnd.length > 0;
-                const contentWithContext = hasOverlap
-                    ? previousChunkEnd + "\n\n" + chunkContent
-                    : chunkContent;
-
-                chunks.push({
-                    position: chunks.length,
-                    headers: [...currentHeaders],
-                    content: contentWithContext,
-                    summary: generateChunkSummary(chunkContent, currentHeaders),
-                    charCount: contentWithContext.length,
-                    hasOverlap
-                });
-
-                // Save end of this chunk for overlap into next
-                previousChunkEnd = extractOverlapText(chunkContent);
-            }
-
-            currentChunk = [];
-            currentCharCount = 0;
+            flushCurrentChunk();
         }
 
-        currentChunk.push(line);
-        currentCharCount += lineLength;
+        // Keep the hard limit effective for very large fenced documents by
+        // closing and reopening the fence at a line boundary.
+        if (inCodeBlock && currentCharCount >= MAX_CHUNK_SIZE && currentChunk.length > 0) {
+            currentChunk.push("```");
+            currentCharCount += "```".length + 1;
+            flushCurrentChunk();
+
+            const reopeningFence = codeFenceLanguage ? `\`\`\`${codeFenceLanguage}` : "```";
+            currentChunk = [reopeningFence];
+            currentCharCount = reopeningFence.length + 1;
+        }
     }
 
     // Don't forget the last chunk
-    const lastContent = currentChunk.join("\n").trim();
-    if (lastContent) {
-        const hasOverlap = chunks.length > 0 && previousChunkEnd.length > 0;
-        const contentWithContext = hasOverlap
-            ? previousChunkEnd + "\n\n" + lastContent
-            : lastContent;
-
-        chunks.push({
-            position: chunks.length,
-            headers: [...currentHeaders],
-            content: contentWithContext,
-            summary: generateChunkSummary(lastContent, currentHeaders),
-            charCount: contentWithContext.length,
-            hasOverlap
-        });
+    if (inCodeBlock && currentChunk.length > 0) {
+        currentChunk.push("```");
     }
+    flushCurrentChunk();
 
     return chunks;
 }
 
-function extractOverlapText(content: string): string {
+export function extractOverlapText(content: string): string {
     // Get the last ~OVERLAP_SIZE characters, but try to end at a sentence boundary
-    if (content.length <= OVERLAP_SIZE) {
+    if (!content || content.length <= OVERLAP_SIZE) {
         return content;
     }
 
@@ -401,20 +1100,22 @@ function extractOverlapText(content: string): string {
         tail.lastIndexOf("?\n")
     );
 
-    if (sentenceEnd > 0) {
-        // Start from after the sentence boundary
-        return tail.slice(sentenceEnd + 2).trim();
+    let overlap = sentenceEnd > 0 ? tail.slice(sentenceEnd + 2).trim() : content.slice(-OVERLAP_SIZE).trim();
+
+    // Ensure overlap doesn't introduce unclosed/dangling code fences into the next chunk
+    const fenceCount = (overlap.match(/```/g) || []).length;
+    if (fenceCount % 2 !== 0) {
+        overlap = overlap.replace(/```[a-zA-Z0-9_-]*/g, "").trim();
     }
 
-    // No good sentence boundary, just take the last OVERLAP_SIZE chars
-    return content.slice(-OVERLAP_SIZE).trim();
+    return overlap;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Summary generation (skip code, find meaningful content)
+// Summary generation
 // ─────────────────────────────────────────────────────────────
 
-function generateChunkSummary(content: string, headers: string[]): string {
+export function generateChunkSummary(content: string, headers: string[]): string {
     const headerPath = headers.join(" > ");
 
     // Find first meaningful prose line
@@ -464,7 +1165,6 @@ function generateChunkSummary(content: string, headers: string[]): string {
 }
 
 function isCodeLikeLine(line: string): boolean {
-    // Common code patterns
     const codePatterns = [
         /^import\s/,
         /^from\s.*import/,
@@ -526,7 +1226,7 @@ function isCodeLikeLine(line: string): boolean {
 // Response formatting
 // ─────────────────────────────────────────────────────────────
 
-function formatReadUrlResponse(doc: StoredDocument): string {
+export function formatReadUrlResponse(doc: StoredDocument): string {
     const parts: string[] = [];
 
     parts.push(`**Title:** ${doc.title}`);
@@ -539,7 +1239,11 @@ function formatReadUrlResponse(doc: StoredDocument): string {
         parts.push(`**Summary:** ${doc.excerpt}`);
     }
 
-    if (!doc.isReaderable) {
+    if (doc.format && doc.format !== "html") {
+        parts.push(`**Format:** ${doc.format.toUpperCase()}`);
+    }
+
+    if (!doc.isReaderable && doc.format === "html") {
         parts.push(`\n⚠️ Note: This page may not be a standard article. Content extraction quality may vary.`);
     }
 
